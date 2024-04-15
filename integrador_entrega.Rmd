@@ -1,0 +1,667 @@
+---
+title: "Projeto Integrador 1T24 Izadora, Lucas e Gustavo"
+output: html_document
+date: "2024-04-03"
+---
+
+## Importando as bibliotecas no R
+
+```{r 2 setup, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(glmnet)
+library(Metrics)
+library(pROC)
+library(PerformanceAnalytics)
+library(readxl)
+library(tibble)
+library(rsample)
+library(rpart)
+library(partykit)
+library(ISLR)
+library(vip)
+```
+
+## Importando os dados
+
+```{r, warning=FALSE, results='hide'}
+df <- read.csv('/Users/izadoraramos/Desktop/Insper/ProjetoIntegrador/df_entrega.csv')
+df
+
+str(df)
+```
+
+### Retirando colunas comp_id
+
+```{r, warning=FALSE, results='hide'}
+
+colunas_para_remover <- c("comp_id", "sales")
+df <- subset(df, select = -which(names(df) %in% colunas_para_remover))
+df
+```
+
+
+# Fazendo gráfico para ver a distribuição
+
+```{r, warning=FALSE}
+
+ggplot(df, aes(x = no_operating)) +
+  geom_histogram(fill = "blue") +
+  labs(title = "Distibuição das operações das empresas")
+
+```
+
+## Separando base em treino e teste
+
+```{r, warning=FALSE, results='hide'}
+
+set.seed(42)
+partition <- sample(nrow(df), size = .70 * nrow(df), replace = FALSE)
+```
+
+
+
+## Transformando valores de treinamento e teste em matriz para a função glmnet
+
+```{r, warning=FALSE, results='hide'}
+df_tr <- df[partition, ]
+x_tr <- model.matrix(~ . -no_operating, df_tr)
+print(nrow(x_tr))
+y_tr <- df$no_operating[partition]
+print(length(y_tr))
+
+df_test <- df[-partition, ]
+x_test <- model.matrix(~ . - no_operating, df_test)
+print(nrow(x_test))
+y_test <- df$no_operating[-partition]
+print(length(y_test))
+```
+
+
+## Data frame resultados
+
+```{r, warning=FALSE}
+
+resultados <- tibble(modelo = c("logistica", "ridge", "lasso", "elastic_net", "arvore_decisao"), 
+                     acuracia = NA, 
+                     auc = NA)
+```
+
+
+# Regressão Logística
+
+## Inicializar um dataframe para armazenar os resultados de corte e acurácia
+
+```{r, warning=FALSE}
+
+df_cortes_acuracia <- data.frame(Corte=numeric(), Acuracia=numeric())
+```
+
+
+## Criar um vetor de cortes de 0.1 até 1, com incremento de 0.01
+
+```{r, warning=FALSE}
+
+cortes <- seq(0.1, 1, by=0.01)
+```
+
+
+## Dataframe para comparar cortes e acurácia 
+
+```{r, warning=FALSE}
+df_cortes_acuracia <- data.frame(Corte=numeric(length(cortes)), Acuracia=numeric(length(cortes)))
+
+```
+
+## Treinando com modelo logístico
+
+```{r, warning=FALSE, echo=TRUE}
+modelo_logistico <- glm(no_operating ~ ., df_tr, family = "binomial")
+modelo_logistico
+
+```
+
+# Aplicando o modelo na base de teste
+
+```{r, warning=FALSE, echo=TRUE}
+prob_logistica <- predict(modelo_logistico, df_test, type = "response")
+```
+
+
+## Encontrando o corte com a melhor acurácia
+
+```{r, warning=FALSE}
+for(i in 1:length(cortes)){
+  corte_atual <- cortes[i]
+  
+  acuracia_atual <- mean(y_test == ifelse(prob_logistica >= corte_atual, 1, 0))
+  
+  df_cortes_acuracia$Corte[i] <- corte_atual
+  df_cortes_acuracia$Acuracia[i] <- acuracia_atual
+}
+
+```
+
+
+## Exibir os resultados
+
+```{r, warning=FALSE}
+print(df_cortes_acuracia)
+
+```
+
+
+## Selecionar o corte com a maior acurácia
+
+```{r, warning=FALSE}
+melhor_corte <- df_cortes_acuracia[which.max(df_cortes_acuracia$Acuracia), ]
+print(paste("Melhor corte: ", melhor_corte$Corte, " com acurácia: ", melhor_corte$Acuracia, sep=""))
+
+corte <- melhor_corte$Corte
+
+
+```
+
+
+## Plotando a área sob a curva
+
+```{r, warning=FALSE}
+roc_logistica <- roc(y_test, prob_logistica)
+plot(roc_logistica, main="Curva ROC", col="#1c61b6")
+
+```
+
+## Calcular a acurácia e a curva ROC com o melhor corte
+
+```{r, warning=FALSE}
+
+resultados$acuracia[resultados$modelo == "logistica"] <- mean(y_test == ifelse(prob_logistica >= corte, 1, 0))
+
+resultados$auc[resultados$modelo == "logistica"] <- roc(y_test, prob_logistica)$auc
+
+resultados
+
+```
+
+
+## Analisando as variáveis mais relevantes
+
+```{r, warning=FALSE}
+vip::vip(modelo_logistico, aesthetics = list(fill = "#FF5757"))
+
+```
+
+# Regressão Logística com método de encolhimento Ridge
+
+## Inicializar um dataframe para armazenar os resultados de corte e acurácia
+
+```{r, warning=FALSE}
+df_cortes_acuracia_ridge <- data.frame(Corte=numeric(), Acuracia=numeric())
+
+```
+
+
+## Criar um vetor de cortes de 0.1 até 1, com incremento de 0.01
+
+```{r, warning=FALSE}
+cortes <- seq(0.1, 1, by=0.01)
+
+```
+
+## Dataframe para comparar cortes e acurácia 
+
+```{r, warning=FALSE}
+df_cortes_acuracia_ridge <- data.frame(Corte=numeric(length(cortes)), Acuracia=numeric(length(cortes)))
+
+```
+
+
+## Treinando o modelo ridge
+
+```{r, warning=FALSE}
+modelo_ridge <- glmnet(x = x_tr, y = y_tr, family = "binomial", alpha = 0)
+
+```
+
+
+## ridge - validação cruzada
+
+```{r, warning=FALSE}
+cv_ridge <- cv.glmnet(x = x_tr, y = y_tr, alpha = 0)
+
+summary(cv_ridge)
+
+plot(cv_ridge, cex.lab = 1.3)
+
+```
+
+
+## Aplicando a base de teste com o lambda ótimo 
+
+```{r, warning=FALSE}
+prob_ridge <- predict(modelo_ridge, newx = x_test, s = cv_ridge$lambda.1se, type = "response") # valor predito
+colnames(prob_ridge)
+
+```
+
+
+## Transformando a matriz de probabilidade em vetor para calcular a área sob a curva (ROC)
+
+```{r, warning=FALSE}
+prob_ridge <- as.numeric(prob_ridge[, 1])
+
+```
+
+## Encontrando o corte com a melhor acurácia
+
+
+```{r, warning=FALSE}
+for(i in 1:length(cortes)){
+  corte_atual <- cortes[i]
+  
+  acuracia_atual <- mean(y_test == ifelse(prob_ridge >= corte_atual, 1, 0))
+  
+  df_cortes_acuracia_ridge$Corte[i] <- corte_atual
+  df_cortes_acuracia_ridge$Acuracia[i] <- acuracia_atual
+}
+
+```
+
+## Exibir os resultados
+
+```{r, warning=FALSE}
+print(df_cortes_acuracia_ridge)
+
+```
+
+## Encontrar o corte com a maior acurácia
+
+```{r, warning=FALSE}
+melhor_corte <- df_cortes_acuracia_ridge[which.max(df_cortes_acuracia_ridge$Acuracia), ]
+print(paste("Melhor corte: ", melhor_corte$Corte, " com acurácia: ", melhor_corte$Acuracia, sep=""))
+
+corte <- melhor_corte$Corte
+
+```
+
+
+# Plotando a área sob a curva
+
+```{r, warning=FALSE}
+roc_ridge <- roc(y_test, prob_ridge)
+plot(roc_ridge, main="Curva ROC", col="#1c61b6")
+
+```
+
+
+## Calculando a acurácia e a curva ROC com o melhor corte
+
+```{r, warning=FALSE}
+resultados$acuracia[resultados$modelo == "ridge"] <- mean(y_test == ifelse(prob_ridge >= corte, 1, 0))
+
+resultados$auc[resultados$modelo == "ridge"] <- roc(y_test, prob_ridge)$auc
+
+resultados
+```
+
+## Verificando as variáveis mais relevantes para o Ridge
+
+```{r, warning=FALSE}
+vip::vip(modelo_ridge, aesthetics = list(fill = "#FF5757"))
+```
+
+
+
+# Regressão Logística com método de encolhimento Lasso
+
+## Inicializar um dataframe para armazenar os resultados de corte e acurácia
+
+```{r, warning=FALSE}
+df_cortes_acuracia_lasso <- data.frame(Corte=numeric(), Acuracia=numeric())
+```
+
+## Criar um vetor de cortes de 0.1 até 1, com incremento de 0.01
+
+```{r, warning=FALSE}
+cortes <- seq(0.1, 1, by=0.01)
+```
+
+
+## Dataframe para comparar cortes e acurácia 
+
+```{r, warning=FALSE}
+df_cortes_acuracia_lasso <- data.frame(Corte=numeric(length(cortes)), Acuracia=numeric(length(cortes)))
+```
+
+## Treinando o modelo lasso
+
+```{r, warning=FALSE}
+modelo_lasso <- glmnet(x = x_tr, y = y_tr, family = "binomial", alpha = 1)
+```
+
+
+# lasso - validação cruzada
+
+```{r, warning=FALSE}
+cv_lasso <- cv.glmnet(x = x_tr, y = y_tr, alpha = 1)
+
+plot(cv_lasso, cex.lab = 1.3)
+
+# Treinando o modelo na base de teste
+prob_lasso <- predict(modelo_lasso, newx = x_test, s = cv_lasso$lambda.1se, type = "response") # valor predito
+prob_lasso <- as.numeric(prob_lasso[, 1])
+```
+
+
+# Treinando o modelo na base de teste
+
+```{r, warning=FALSE}
+
+prob_lasso <- predict(modelo_lasso, newx = x_test, s = cv_lasso$lambda.1se, type = "response") # valor predito
+prob_lasso <- as.numeric(prob_lasso[, 1])
+```
+
+# Encontrando o melhor corte
+
+```{r, warning=FALSE}
+for(i in 1:length(cortes)){
+  corte_atual <- cortes[i]
+  
+  acuracia_atual <- mean(y_test == ifelse(prob_lasso >= corte_atual, 1, 0))
+  
+  df_cortes_acuracia_lasso$Corte[i] <- corte_atual
+  df_cortes_acuracia_lasso$Acuracia[i] <- acuracia_atual
+}
+```
+
+# Exibir os resultados
+
+```{r, warning=FALSE}
+
+prob_lasso <- predict(modelo_lasso, newx = x_test, s = cv_lasso$lambda.1se, type = "response") # valor predito
+prob_lasso <- as.numeric(prob_lasso[, 1])
+```
+
+## Encontrando o melhor corte
+
+```{r, warning=FALSE}
+print(df_cortes_acuracia_lasso)
+```
+
+## Encontrar o corte com a maior acurácia
+
+```{r, warning=FALSE}
+melhor_corte <- df_cortes_acuracia_lasso[which.max(df_cortes_acuracia_lasso$Acuracia), ]
+print(paste("Melhor corte: ", melhor_corte$Corte, " com acurácia: ", melhor_corte$Acuracia, sep=""))
+
+corte <- melhor_corte$Corte
+```
+
+
+# Plotando a área sob a curva
+
+```{r, warning=FALSE}
+roc_lasso <- roc(y_test, prob_lasso)
+plot(roc_lasso, main="Curva ROC", col="#1c61b6")
+```
+
+
+# Calculando os valore de acurácia e área sob a curva (ROC)
+
+```{r, warning=FALSE}
+resultados$acuracia[resultados$modelo == "lasso"] <- mean(y_test == ifelse(prob_lasso >= corte, 1, 0))
+
+resultados$auc[resultados$modelo == "lasso"] <- roc(y_test, prob_lasso)$auc
+
+resultados
+```
+
+# Analisando variáveis mais relevantes
+
+```{r, warning=FALSE}
+vip::vip(modelo_lasso, aesthetics = list(fill = "#FF5757"))
+```
+
+
+# Regressão Logística com método de encolhimento elastic
+
+
+## Inicializar um dataframe para armazenar os resultados de corte e acurácia
+
+```{r, warning=FALSE}
+df_cortes_acuracia_elastic <- data.frame(Corte=numeric(), Acuracia=numeric())
+```
+
+# Criar um vetor de cortes de 0.1 até 1, com incremento de 0.01
+
+```{r, warning=FALSE}
+cortes <- seq(0.1, 1, by=0.01)
+```
+
+# Dataframe para comparar cortes e acurácia 
+
+```{r, warning=FALSE}
+df_cortes_acuracia_elastic <- data.frame(Corte=numeric(length(cortes)), Acuracia=numeric(length(cortes)))
+```
+
+
+# Treinando o modelo elastic_net
+
+```{r, warning=FALSE}
+modelo_elastic <- glmnet(x = x_tr, y = y_tr, family = "binomial", alpha = 0.5)
+```
+
+
+# elastic - validação cruzada
+
+```{r, warning=FALSE}
+cv_elastic <- cv.glmnet(x = x_tr, y = y_tr, alpha = 0.5)
+
+plot(cv_elastic, cex.lab = 1.3)
+```
+
+
+# Treinando o modelo elastic_net
+
+```{r, warning=FALSE}
+prob_elastic <- predict(modelo_elastic, newx = x_test, s = cv_elastic$lambda.1se, type = "response") # valor predito
+prob_elastic <- as.numeric(prob_elastic[, 1])
+```
+
+## Encontrando o melhor corte
+
+```{r, warning=FALSE}
+for(i in 1:length(cortes)){
+  corte_atual <- cortes[i]
+  
+  acuracia_atual <- mean(y_test == ifelse(prob_elastic >= corte_atual, 1, 0))
+  
+  df_cortes_acuracia_elastic$Corte[i] <- corte_atual
+  df_cortes_acuracia_elastic$Acuracia[i] <- acuracia_atual
+}
+```
+
+
+# Exibir os resultados
+
+```{r, warning=FALSE}
+print(df_cortes_acuracia_elastic)
+```
+
+## Encontrar o corte com a maior acurácia
+
+```{r, warning=FALSE}
+melhor_corte <- df_cortes_acuracia_elastic[which.max(df_cortes_acuracia_elastic$Acuracia), ]
+print(paste("Melhor corte: ", melhor_corte$Corte, " com acurácia: ", melhor_corte$Acuracia, sep=""))
+
+corte <- melhor_corte$Corte
+```
+
+## Plotando a área sob a curva
+
+```{r, warning=FALSE}
+roc_elastic <- roc(y_test, prob_elastic)
+plot(roc_elastic, main="Curva ROC", col="#1c61b6")
+```
+
+## Comparando os resultados dos modelos
+
+```{r, warning=FALSE}
+resultados$acuracia[resultados$modelo == "elastic_net"] <- mean(y_test == ifelse(prob_elastic >= corte, 1, 0))
+
+resultados$auc[resultados$modelo == "elastic_net"] <- roc(y_test, prob_elastic)$auc
+
+resultados
+
+```
+
+## Analisando as variáveis relevantes
+
+```{r, warning=FALSE}
+vip::vip(modelo_elastic, aesthetics = list(fill = "#FF5757"))
+
+```
+
+
+# Árvore de regressão
+
+## Inicializar um dataframe para armazenar os resultados de corte e acurácia
+
+```{r, warning=FALSE}
+df_cortes_acuracia_arvore <- data.frame(Corte=numeric(), Acuracia=numeric())
+
+```
+
+# Criar um vetor de cortes de 0.1 até 1, com incremento de 0.01
+
+```{r, warning=FALSE}
+cortes <- seq(0.1, 1, by=0.01)
+
+```
+
+# Dataframe para comparar cortes e acurácia 
+```{r, warning=FALSE}
+df_cortes_acuracia_arvore <- data.frame(Corte=numeric(length(cortes)), Acuracia=numeric(length(cortes)))
+
+```
+
+# Modelo de árvore
+
+## Validação cruzada para a árvore
+
+```{r, warning=FALSE}
+library(rpart.plot)
+arvore <- rpart(no_operating ~ ., data = df_tr, method = "class", control = rpart.control(xval = 10, cp = 0))
+#rpart.plot(arvore, roundint = FALSE)
+```
+
+## Analisando CP da Árvore
+
+```{r, warning=FALSE}
+arvore$cptable
+```
+
+## Encontrando o CP ótimo para árvore
+
+```{r, warning=FALSE}
+cp_ot <- arvore$cptable[which.min(arvore$cptable[,"xerror"]),"CP"]
+cp_ot <- arvore$cptable %>%
+  as_tibble() %>%
+  filter(xerror == min(xerror))
+```
+
+## Rodando o modelo com o CP ótimo
+
+```{r, warning=FALSE}
+poda1 <- prune(arvore, cp = cp_ot$CP[1])
+rpart.plot(poda1, roundint = FALSE, main = "Árvore de Decisão")
+```
+
+## Treinando o modelo com o CP ótimo
+
+```{r, warning=FALSE}
+prob_arvore = predict(poda1, newdata = df_test, type = "prob")
+prob_arvore <- as.numeric(prob_arvore[, 2])
+
+for(i in 1:length(cortes)){
+  corte_atual <- cortes[i]
+  
+  acuracia_atual <- mean(y_test == ifelse(prob_arvore >= corte_atual, 1, 0))
+  
+  df_cortes_acuracia_arvore$Corte[i] <- corte_atual
+  df_cortes_acuracia_arvore$Acuracia[i] <- acuracia_atual
+}
+```
+
+
+## Exibir os resultados
+
+```{r, warning=FALSE}
+print(df_cortes_acuracia_arvore)
+```
+
+# Encontrar o corte com a maior acurácia
+
+```{r, warning=FALSE}
+melhor_corte <- df_cortes_acuracia_arvore[which.max(df_cortes_acuracia_arvore$Acuracia), ]
+print(paste("Melhor corte: ", melhor_corte$Corte, " com acurácia: ", melhor_corte$Acuracia, sep=""))
+
+corte <- melhor_corte$Corte
+```
+
+## Plotando a área sob a curva
+
+```{r, warning=FALSE}
+roc_arvore <- roc(y_test, prob_arvore)
+plot(roc_arvore, main="Curva ROC", col="#1c61b6")
+```
+
+## Comparando os resultados dos modelos
+
+```{r, warning=FALSE}
+resultados$acuracia[resultados$modelo == "arvore_decisao"] <- mean(y_test == ifelse(prob_arvore >= corte, 1, 0))
+
+resultados$auc[resultados$modelo == "arvore_decisao"] <- roc(y_test, prob_arvore)$auc
+
+resultados
+```
+
+## Analisandoas variáveis mais relevantes
+
+```{r, warning=FALSE}
+vip::vip(poda1, aesthetics = list(fill = "#FF5757"))
+
+```
+
+
+## Plot de todas as curvas roc
+
+```{r, fig.width=8, fig.height=4}
+
+plot(roc_logistica, main="Curvas ROC Comparativas", col="#1c61b6")
+lines(roc_ridge, col="#b61c4a")
+lines(roc_lasso, col="#2a9d8f")
+lines(roc_elastic, col="#d35400")
+lines(roc_arvore, col="#8e44ad")
+legend(x = .05, y = .8, legend=c("Logística", "Ridge", "Lasso", "Elastic Net", "Árvore"), 
+       col=c("#1c61b6", "#b61c4a", "#2a9d8f", "#d35400", "#8e44ad"), lwd=2, 
+       x.intersp = 0.5, y.intersp = 0.8, pt.cex = 1, cex = 0.75, bty = "n")
+```
+
+
+
+
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+## Including Plots
+
+You can also embed plots, for example:
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
