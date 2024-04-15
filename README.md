@@ -1,4 +1,4 @@
-Projeto integrador da matéria de Computação para Ciência de Dados da pós graduação do em Ciência de Dados e Decisão do Insper.
+Projeto integrador da matéria de Computação para Ciência de Dados e Aprendizagem estatística de máquina I da pós graduação do em Ciência de Dados e Decisão do Insper.
 Projeto em grupo de três integrantes, eu Izadora Ramos, Gustavo Tadeu Garcia e Lucas Ribeiro da Silva. 
 
 O projeto integrador consiste em construir um pipeline completo de pré- processamento de dados para posteriormente construção de modelo preditivo de classificação, voltado para predizer se uma empresa irá deixar de operar em até dois anos.
